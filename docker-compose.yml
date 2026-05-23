@@ -1,0 +1,9 @@
+services:
+  signer-oss:
+    build: .
+    env_file: .env
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data
+    ports:
+      - "${SIGNER_PORT:-3101}:${SIGNER_PORT:-3101}"
