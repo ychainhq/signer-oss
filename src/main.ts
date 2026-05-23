@@ -1,19 +1,12 @@
-/**
- * chain-api Community Signer — Entry Point
- *
- * Handles graceful shutdown on SIGTERM/SIGINT.
- */
-
 import 'dotenv/config';
 import { OssSigner } from './signer';
 
 const signer = new OssSigner();
 
 async function main(): Promise<void> {
-  // Graceful shutdown handlers
   const shutdown = async (signal: string) => {
-    process.stdout.write(`\n[main] Received ${signal}, shutting down...\n`);
-    await signer.stop();
+    process.stdout.write(`\n[main] ${signal} received, shutting down...\n`);
+    await signer.shutdown();
     process.exit(0);
   };
 
@@ -21,7 +14,7 @@ async function main(): Promise<void> {
   process.on('SIGINT', () => void shutdown('SIGINT'));
 
   try {
-    await signer.start();
+    await signer.startup();
     process.stdout.write('[main] Signer running. Press Ctrl+C to stop.\n');
   } catch (err) {
     process.stderr.write(`[main] Fatal error: ${String(err)}\n`);

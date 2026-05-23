@@ -1,280 +1,226 @@
 /**
- * OssSigner — main signer class.
+ * OssSigner — Community signer daemon.
  *
- * Manages the polling loop, task processing, heartbeat, and auto-enrollment.
+ * Extends PollingLoop from @chain-api/external-signer-core.
+ * Dispatches signing tasks to the correct ISigningAdapter by payloadFormat.
+ * New chain support = add a new ISigningAdapter and register it below.
  */
 
+import {
+  PollingLoop,
+  PollingLoopConfig,
+  SignerApiClient,
+  ISigningAdapter,
+} from '@chain-api/external-signer-core';
+import { SigningTask } from '@chain-api/external-signer-protocol';
 import { LocalKeystore } from './keystore/local-keystore';
 import { BtcPsbtAdapter } from './adapters/btc-psbt-adapter';
+import { EvmTxAdapter } from './adapters/evm-tx-adapter';
 import { LocalAuditSink } from './audit/local-audit-sink';
-import { config, getSupportedChains, getSupportedAssets, getSupportedFormats } from './config';
+import { HealthServer } from './health-server';
+import {
+  config,
+  getSupportedChains,
+  getSupportedAssets,
+  getSupportedFormats,
+  isEvmEnabled,
+} from './config';
 
-// Inline API client (avoids dependency on shared package for OSS self-containment)
-class SimpleApiClient {
-  private baseUrl: string;
-  private apiKey: string;
-  private signerId: string;
+export class OssSigner extends PollingLoop {
+  private readonly keystore: LocalKeystore;
+  private readonly auditSink: LocalAuditSink;
+  private readonly adapters: ISigningAdapter[];
+  private readonly healthServer: HealthServer;
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
-    this.baseUrl = config.CHAIN_API_BASE_URL;
-    this.apiKey = config.SIGNER_API_KEY;
-    this.signerId = config.SIGNER_ID;
-  }
+    const keystore = new LocalKeystore();
+    const auditSink = new LocalAuditSink();
 
-  private get headers() {
-    return {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${this.apiKey}`,
+    const client = new SignerApiClient({
+      baseUrl: config.CHAIN_API_BASE_URL,
+      tenantId: config.TENANT_ID,
+      signerId: config.SIGNER_ID,
+      apiKey: config.SIGNER_API_KEY,
+    });
+
+    const loopConfig: PollingLoopConfig = {
+      intervalMs: config.POLL_INTERVAL_MS,
+      taskBatchSize: config.TASK_BATCH_SIZE,
+      client,
+      onError: (err) => process.stderr.write(`[signer] Poll error: ${err.message}\n`),
+      onTaskProcessed: (task, result) =>
+        process.stdout.write(`[signer] Task ${task.id} → ${result}\n`),
     };
+
+    super(loopConfig);
+
+    this.keystore = keystore;
+    this.auditSink = auditSink;
+    this.healthServer = new HealthServer(() => keystore.isHealthy());
+
+    // Register adapters — add new chains here
+    this.adapters = [
+      new BtcPsbtAdapter(this.keystore),
+      ...(isEvmEnabled() ? [new EvmTxAdapter(this.keystore)] : []),
+    ];
   }
 
-  private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
-    const res = await fetch(`${this.baseUrl}${path}`, {
-      method,
-      headers: this.headers,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    });
-    if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      throw new Error(`HTTP ${res.status}: ${text}`);
-    }
-    return res.json() as Promise<T>;
-  }
+  async startup(): Promise<void> {
+    process.stdout.write(`[signer] Starting ${config.SIGNER_NAME} (${config.SIGNER_ID})\n`);
 
-  async enroll(): Promise<void> {
-    await this.request('POST', '/v1/external-signers/enroll', {
-      name: config.SIGNER_NAME,
-      edition: 'community',
-      publicKey: config.SIGNER_PUBLIC_KEY,
-      signerFingerprint: config.SIGNER_FINGERPRINT,
-      capabilities: {
-        chains: getSupportedChains(),
-        assets: getSupportedAssets(),
-        formats: getSupportedFormats(),
-      },
-    });
-  }
-
-  async heartbeat(): Promise<void> {
-    await this.request('POST', `/v1/external-signers/${this.signerId}/heartbeat`, {
-      status: 'healthy',
-      version: '1.0.0',
-      capabilities: {
-        chains: getSupportedChains(),
-        assets: getSupportedAssets(),
-        formats: getSupportedFormats(),
-      },
-      keyFingerprints: [config.SIGNER_FINGERPRINT],
-      time: new Date().toISOString(),
-    });
-  }
-
-  async listTasks(limit = 5): Promise<any[]> {
-    const result = await this.request<{ items: any[] }>(
-      'GET', `/v1/external-signers/${this.signerId}/tasks?limit=${limit}`
-    );
-    return result.items ?? [];
-  }
-
-  async claimTask(taskId: string): Promise<any> {
-    const result = await this.request<{ data: any }>(
-      'POST', `/v1/external-signers/${this.signerId}/tasks/${taskId}/claim`, {}
-    );
-    return result.data;
-  }
-
-  async submitTask(taskId: string, body: object): Promise<any> {
-    const result = await this.request<{ data: any }>(
-      'POST', `/v1/external-signers/${this.signerId}/tasks/${taskId}/submit`, body
-    );
-    return result.data;
-  }
-
-  async rejectTask(taskId: string, body: object): Promise<any> {
-    const result = await this.request<{ data: any }>(
-      'POST', `/v1/external-signers/${this.signerId}/tasks/${taskId}/reject`, body
-    );
-    return result.data;
-  }
-}
-
-export class OssSigner {
-  private keystore: LocalKeystore;
-  private btcAdapter: BtcPsbtAdapter;
-  private auditSink: LocalAuditSink;
-  private client: SimpleApiClient;
-  private pollInterval: ReturnType<typeof setInterval> | null = null;
-  private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
-  private running = false;
-  private processingTask = false;
-
-  constructor() {
-    this.keystore = new LocalKeystore();
-    this.btcAdapter = new BtcPsbtAdapter(this.keystore);
-    this.auditSink = new LocalAuditSink();
-    this.client = new SimpleApiClient();
-  }
-
-  async start(): Promise<void> {
-    process.stdout.write(`[signer] Starting ${config.SIGNER_NAME} (${config.SIGNER_ID})...\n`);
-
-    // Load keys
     await this.keystore.load();
-    process.stdout.write(`[signer] Keystore loaded. Fingerprints: ${this.keystore.listFingerprints().join(', ')}\n`);
+    const fingerprints = await this.keystore.listFingerprints();
+    process.stdout.write(`[signer] Keys loaded: ${fingerprints.join(', ')}\n`);
 
-    // Auto-enroll
+    await this.healthServer.start();
+
+    const supportedChains = getSupportedChains().join(', ');
+    process.stdout.write(`[signer] Chains: ${supportedChains}\n`);
+
     if (config.SIGNER_AUTO_ENROLL) {
-      try {
-        await this.client.enroll();
-        process.stdout.write(`[signer] Auto-enrolled with chain-api\n`);
-      } catch (err) {
-        process.stderr.write(`[signer] Auto-enroll warning: ${String(err)}\n`);
-      }
+      await this.enroll();
     }
 
-    this.running = true;
+    // Initial heartbeat
+    await this.sendHeartbeat().catch((err: Error) =>
+      process.stderr.write(`[signer] Initial heartbeat failed: ${err.message}\n`)
+    );
 
-    // Start heartbeat (every 30s)
-    this.heartbeatInterval = setInterval(async () => {
-      try {
-        await this.client.heartbeat();
-      } catch (err) {
-        process.stderr.write(`[signer] Heartbeat failed: ${String(err)}\n`);
-      }
+    // Periodic heartbeat every 30s
+    this.heartbeatTimer = setInterval(async () => {
+      await this.sendHeartbeat().catch((err: Error) =>
+        process.stderr.write(`[signer] Heartbeat failed: ${err.message}\n`)
+      );
     }, 30_000);
 
-    // Send initial heartbeat
-    try {
-      await this.client.heartbeat();
-      process.stdout.write(`[signer] Initial heartbeat sent\n`);
-    } catch (err) {
-      process.stderr.write(`[signer] Initial heartbeat failed: ${String(err)}\n`);
-    }
-
-    // Start polling loop
-    this.pollInterval = setInterval(async () => {
-      if (this.processingTask) return;
-      this.processingTask = true;
-      try {
-        await this.pollAndProcess();
-      } catch (err) {
-        process.stderr.write(`[signer] Poll error: ${String(err)}\n`);
-      } finally {
-        this.processingTask = false;
-      }
-    }, config.POLL_INTERVAL_MS);
-
+    this.start();
     process.stdout.write(`[signer] Polling every ${config.POLL_INTERVAL_MS}ms\n`);
   }
 
-  async stop(): Promise<void> {
-    this.running = false;
-    if (this.pollInterval) { clearInterval(this.pollInterval); this.pollInterval = null; }
-    if (this.heartbeatInterval) { clearInterval(this.heartbeatInterval); this.heartbeatInterval = null; }
-    process.stdout.write(`[signer] Stopped gracefully\n`);
+  async shutdown(): Promise<void> {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+    await this.stop();
+    await this.healthServer.stop();
+    process.stdout.write('[signer] Stopped gracefully\n');
   }
 
-  private async pollAndProcess(): Promise<void> {
-    let tasks: any[];
-    try {
-      tasks = await this.client.listTasks(config.TASK_BATCH_SIZE);
-    } catch (err) {
-      process.stderr.write(`[signer] Failed to list tasks: ${String(err)}\n`);
-      return;
-    }
-
-    if (tasks.length === 0) return;
-
-    for (const task of tasks) {
-      await this.processTask(task);
-    }
-  }
-
-  private async processTask(task: any): Promise<void> {
-    const taskId = task.id;
-
-    // Claim the task
-    let claimed: any;
-    try {
-      claimed = await this.client.claimTask(taskId);
-    } catch (err) {
-      process.stderr.write(`[signer] Failed to claim task ${taskId}: ${String(err)}\n`);
-      return;
-    }
-
-    // Only handle BTC PSBT for now
-    if (claimed.payloadFormat !== 'btc_psbt') {
-      process.stderr.write(`[signer] Unsupported payload format: ${claimed.payloadFormat}\n`);
-      await this.client.rejectTask(taskId, {
+  /**
+   * PollingLoop hook — called for each available task.
+   * Routes to the correct adapter by payloadFormat.
+   */
+  protected async processTask(task: SigningTask): Promise<'signed' | 'rejected' | 'skipped'> {
+    // Find the right adapter
+    const adapter = this.adapters.find((a) => a.canHandle(task));
+    if (!adapter) {
+      process.stderr.write(
+        `[signer] No adapter for task ${task.id} (format=${task.payloadFormat}, chain=${task.chain})\n`
+      );
+      await this.client.rejectTask(task.id, {
         reasonCode: 'signer_internal_error',
-        reasonMessage: `Unsupported payload format: ${claimed.payloadFormat}`,
+        reasonMessage: `Unsupported payload format '${task.payloadFormat}' for chain '${task.chain}'`,
         rejectedAt: new Date().toISOString(),
-      });
-      return;
+      }).catch(() => {});
+      return 'rejected';
+    }
+
+    // Claim
+    let claimed: SigningTask;
+    try {
+      claimed = await this.client.claimTask(task.id);
+    } catch (err) {
+      process.stderr.write(`[signer] Failed to claim task ${task.id}: ${String(err)}\n`);
+      return 'skipped';
     }
 
     // Sign
-    let signResult: any;
     try {
-      signResult = await this.btcAdapter.sign({
-        taskId,
-        unsignedPayload: claimed.unsignedPayload,
-        unsignedPayloadHash: claimed.unsignedPayloadHash,
-        amountRaw: claimed.amountRaw,
-        feeRateSatVb: claimed.feeRateSatVb,
-        outputsCount: claimed.outputsCount,
-        expiresAt: claimed.expiresAt,
-      });
-    } catch (err: any) {
-      process.stderr.write(`[signer] Signing failed for task ${taskId}: ${String(err)}\n`);
+      const signResult = await adapter.sign(claimed);
 
-      await this.client.rejectTask(taskId, {
-        reasonCode: err.code ?? 'signing_failed',
-        reasonMessage: String(err.message ?? err),
+      await this.client.submitTask(task.id, {
+        signedPayload: signResult.signedPayload,
+        signedPayloadHash: signResult.signedPayloadHash,
+        signerFingerprint: signResult.signerFingerprint,
+        signerResponseSignature: signResult.signerResponseSignature,
+        signedAt: signResult.signedAt,
+      });
+
+      await this.auditSink.log({
+        id: `audit_${Date.now()}`,
+        type: 'signing_signed',
+        taskId: task.id,
+        signerId: config.SIGNER_ID,
+        result: 'signed',
+        chainId: claimed.chain,
+        assetId: claimed.assetId,
+        amountRaw: claimed.amountRaw,
+        timestamp: new Date().toISOString(),
+      });
+
+      return 'signed';
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      const code = (err as { code?: string }).code ?? 'signing_failed';
+
+      process.stderr.write(`[signer] Signing failed for task ${task.id}: ${message}\n`);
+
+      await this.client.rejectTask(task.id, {
+        reasonCode: code,
+        reasonMessage: message,
         rejectedAt: new Date().toISOString(),
       }).catch(() => {});
 
       await this.auditSink.log({
         id: `audit_${Date.now()}`,
         type: 'signing_rejected',
-        taskId,
+        taskId: task.id,
         signerId: config.SIGNER_ID,
         result: 'rejected',
-        chainId: 'bitcoin',
-        assetId: 'bitcoin:BTC',
+        chainId: claimed.chain,
+        assetId: claimed.assetId,
         amountRaw: claimed.amountRaw,
-        errorCode: err.code,
-        errorMessage: String(err.message ?? err),
+        errorCode: code,
+        errorMessage: message,
         timestamp: new Date().toISOString(),
       });
 
-      return;
+      return 'rejected';
     }
+  }
 
-    // Submit signed payload
+  private async enroll(): Promise<void> {
     try {
-      await this.client.submitTask(taskId, {
-        signedPayload: signResult.signedPayload,
-        signedPayloadHash: signResult.signedPayloadHash,
-        signerFingerprint: signResult.signerFingerprint,
-        signedAt: signResult.signedAt,
+      await this.client.heartbeat({
+        status: 'healthy',
+        version: '1.0.0',
+        capabilities: {
+          chains: getSupportedChains(),
+          assets: getSupportedAssets(),
+          formats: getSupportedFormats(),
+        },
+        keyFingerprints: await this.keystore.listFingerprints(),
+        time: new Date().toISOString(),
       });
-
-      process.stdout.write(`[signer] Task ${taskId} signed and submitted\n`);
-
-      await this.auditSink.log({
-        id: `audit_${Date.now()}`,
-        type: 'signing_signed',
-        taskId,
-        signerId: config.SIGNER_ID,
-        result: 'signed',
-        chainId: 'bitcoin',
-        assetId: 'bitcoin:BTC',
-        amountRaw: claimed.amountRaw,
-        timestamp: new Date().toISOString(),
-      });
+      process.stdout.write('[signer] Auto-enrolled with chain-api\n');
     } catch (err) {
-      process.stderr.write(`[signer] Submit failed for task ${taskId}: ${String(err)}\n`);
+      process.stderr.write(`[signer] Auto-enroll warning: ${String(err)}\n`);
     }
+  }
+
+  private async sendHeartbeat(): Promise<void> {
+    await this.client.heartbeat({
+      status: (await this.keystore.isHealthy()) ? 'healthy' : 'unhealthy',
+      version: '1.0.0',
+      capabilities: {
+        chains: getSupportedChains(),
+        assets: getSupportedAssets(),
+        formats: getSupportedFormats(),
+      },
+      keyFingerprints: await this.keystore.listFingerprints(),
+      time: new Date().toISOString(),
+    });
   }
 }

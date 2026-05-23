@@ -1,32 +1,25 @@
 /**
- * BTC PSBT Signing Adapter
+ * BTC PSBT Signing Adapter — implements ISigningAdapter.
  *
- * Signs BTC PSBT transactions using bitcoinjs-lib.
- * Performs local policy validation before signing.
+ * Validates and signs BTC PSBT transactions using bitcoinjs-lib + ecpair.
+ * Local policy validation runs before any signing attempt.
  */
 
 import crypto from 'crypto';
 import * as bitcoin from 'bitcoinjs-lib';
+import ECPairFactory from 'ecpair';
+import * as tinysecp from 'tiny-secp256k1';
+import {
+  ISigningAdapter,
+  SignedPayload,
+  sha256Hex,
+} from '@chain-api/external-signer-core';
+import { SigningTask } from '@chain-api/external-signer-protocol';
 import { LocalKeystore } from '../keystore/local-keystore';
 import { evaluateCommunityPolicy } from '../policy/community-policy';
 import { config } from '../config';
 
-export interface SignTaskInput {
-  taskId: string;
-  unsignedPayload: string;      // base64 PSBT
-  unsignedPayloadHash: string;  // SHA-256 of unsignedPayload
-  amountRaw: string;
-  feeRateSatVb?: number | null;
-  outputsCount?: number | null;
-  expiresAt: string;
-}
-
-export interface SignTaskResult {
-  signedPayload: string;
-  signedPayloadHash: string;
-  signerFingerprint: string;
-  signedAt: string;
-}
+const ECPair = ECPairFactory(tinysecp);
 
 function getBitcoinNetwork(): bitcoin.networks.Network {
   switch (config.BTC_NETWORK) {
@@ -37,63 +30,49 @@ function getBitcoinNetwork(): bitcoin.networks.Network {
   }
 }
 
-export class BtcPsbtAdapter {
-  private keystore: LocalKeystore;
+export class BtcPsbtAdapter implements ISigningAdapter {
+  readonly payloadFormat = 'btc_psbt' as const;
 
-  constructor(keystore: LocalKeystore) {
-    this.keystore = keystore;
+  constructor(private readonly keystore: LocalKeystore) {}
+
+  canHandle(task: SigningTask): boolean {
+    return task.payloadFormat === 'btc_psbt' && task.chain === 'bitcoin';
   }
 
-  /**
-   * Validate and sign a PSBT.
-   * Throws if policy fails or key not found.
-   */
-  async sign(task: SignTaskInput): Promise<SignTaskResult> {
-    // 1. Policy check
+  async sign(task: SigningTask): Promise<SignedPayload> {
+    // 1. Local policy check
     const policy = evaluateCommunityPolicy({
       amountRaw: task.amountRaw,
-      feeRateSatVb: task.feeRateSatVb,
-      outputsCount: task.outputsCount,
+      feeRateSatVb: task.feeRateSatVb ?? undefined,
+      outputsCount: task.outputsCount ?? undefined,
       expiresAt: task.expiresAt,
     });
 
     if (!policy.approved) {
-      const err = new Error(policy.reason) as any;
+      const err = new Error(policy.reason) as NodeJS.ErrnoException & { code?: string };
       err.code = policy.errorCode ?? 'signer_policy_rejected';
       throw err;
     }
 
-    // 2. Verify payload hash
-    const computedHash = crypto
-      .createHash('sha256')
-      .update(task.unsignedPayload)
-      .digest('hex');
-
+    // 2. Verify unsigned payload hash
+    const computedHash = sha256Hex(task.unsignedPayload);
     if (computedHash !== task.unsignedPayloadHash) {
       throw new Error('unsignedPayloadHash mismatch — payload integrity check failed');
     }
 
     // 3. Get signing key
     const fingerprint = config.SIGNER_FINGERPRINT;
-    const keyEntry = this.keystore.getKey(fingerprint);
-    if (!keyEntry) {
-      throw new Error(`No key found for fingerprint: ${fingerprint}`);
-    }
-
-    // 4. Sign PSBT
+    const wif = this.keystore.getWif(fingerprint);
     const network = getBitcoinNetwork();
+    const keyPair = ECPair.fromWIF(wif, network);
 
+    // 4. Parse and sign PSBT
     let psbt: bitcoin.Psbt;
     try {
       psbt = bitcoin.Psbt.fromBase64(task.unsignedPayload, { network });
     } catch (err) {
       throw new Error(`Failed to parse PSBT: ${String(err)}`);
     }
-
-    // Import WIF key
-    const keyPair = bitcoin.ECPair
-      ? bitcoin.ECPair.fromWIF(keyEntry.wif, network)
-      : (() => { throw new Error('ECPair not available — install ecpair package'); })();
 
     try {
       psbt.signAllInputs(keyPair);
@@ -103,14 +82,13 @@ export class BtcPsbtAdapter {
     }
 
     const signedBase64 = psbt.toBase64();
-    const signedHash = crypto.createHash('sha256').update(signedBase64).digest('hex');
-    const signedAt = new Date().toISOString();
+    const signedHash = sha256Hex(signedBase64);
 
     return {
       signedPayload: signedBase64,
       signedPayloadHash: signedHash,
       signerFingerprint: fingerprint,
-      signedAt,
+      signedAt: new Date().toISOString(),
     };
   }
 }

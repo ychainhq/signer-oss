@@ -17,28 +17,36 @@ const configSchema = z.object({
   SUPPORTED_ASSETS: z.string().default('bitcoin:BTC'),
   SUPPORTED_FORMATS: z.string().default('btc_psbt'),
 
-  // BTC signing
+  // --- BTC signing ---
   BTC_SIGNING_MODE: z.enum(['dev_env_key', 'keystore_file']).default('dev_env_key'),
   BTC_DEV_PRIVATE_KEY_WIF: z.string().optional(),
   BTC_KEYSTORE_PATH: z.string().optional(),
   BTC_KEYSTORE_PASSWORD: z.string().optional(),
   BTC_NETWORK: z.enum(['mainnet', 'testnet', 'regtest']).default('regtest'),
 
-  // Policy
+  // --- EVM signing (optional — enable by adding ethereum to SUPPORTED_CHAINS) ---
+  // EVM_DEV_PRIVATE_KEY_HEX: raw 32-byte private key as 64-char hex. Dev ONLY.
+  EVM_DEV_PRIVATE_KEY_HEX: z.string().optional(),
+  // EVM_SIGNER_FINGERPRINT: stable identifier for the EVM key (e.g. "evm:addr:0xABCD...")
+  EVM_SIGNER_FINGERPRINT: z.string().optional(),
+  // EVM_CHAIN_IDS: comma-separated chain IDs this signer accepts (e.g. "1,137,8453")
+  EVM_CHAIN_IDS: z.string().optional(),
+
+  // --- Community policy ---
   MAX_AUTO_SIGN_AMOUNT_SATS: z.coerce.bigint().default(1_000_000n),
   MAX_FEE_RATE_SAT_VB: z.coerce.number().int().default(50),
   MAX_OUTPUTS_PER_BATCH: z.coerce.number().int().default(200),
   ALLOWED_DESTINATIONS: z.string().default(''),
 
-  // Audit
+  // --- Audit ---
   AUDIT_LOG_FILE: z.string().default('./data/audit.log'),
   AUDIT_STDOUT: z.coerce.boolean().default(true),
 
-  // HTTP status server
+  // --- HTTP status server ---
   SIGNER_PORT: z.coerce.number().int().default(3101),
   SIGNER_BIND_HOST: z.string().default('127.0.0.1'),
 
-  // Enrollment
+  // --- Enrollment ---
   SIGNER_AUTO_ENROLL: z.coerce.boolean().default(true),
   SIGNER_FINGERPRINT: z.string().default('btc:placeholder:0000000000000000'),
   SIGNER_PUBLIC_KEY: z.string().default('ed25519:placeholder'),
@@ -73,4 +81,13 @@ export function getSupportedFormats(): string[] {
 export function getAllowedDestinations(): string[] {
   if (!config.ALLOWED_DESTINATIONS) return [];
   return config.ALLOWED_DESTINATIONS.split(',').map((s) => s.trim()).filter(Boolean);
+}
+
+export function getEvmChainIds(): number[] {
+  if (!config.EVM_CHAIN_IDS) return [];
+  return config.EVM_CHAIN_IDS.split(',').map((s) => parseInt(s.trim(), 10)).filter((n) => !isNaN(n));
+}
+
+export function isEvmEnabled(): boolean {
+  return getSupportedChains().some((c) => c !== 'bitcoin');
 }
