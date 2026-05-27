@@ -1,6 +1,6 @@
 {
   "name": "chain-api-signer-oss",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "chain-api Community/OSS External Signer Daemon",
   "main": "dist/main.js",
   "scripts": {
@@ -13,8 +13,14 @@
   "jest": {
     "preset": "ts-jest",
     "testEnvironment": "node",
-    "testMatch": ["**/tests/**/*.test.ts"],
-    "moduleFileExtensions": ["ts", "js", "json"],
+    "testMatch": [
+      "**/tests/**/*.test.ts"
+    ],
+    "moduleFileExtensions": [
+      "ts",
+      "js",
+      "json"
+    ],
     "testTimeout": 10000
   },
   "dependencies": {
