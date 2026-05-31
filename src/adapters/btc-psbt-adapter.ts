@@ -93,9 +93,12 @@ export class BtcPsbtAdapter implements ISigningAdapter {
             'engine must enrich PSBT before creating signing task'
           );
         }
-        // Path is relative to account xpub, e.g. "m/0/3"
-        const path = bip32Derivs[0].path;
-        const childNode = accountNode.derivePath(path);
+        // Path is relative to account xpub, e.g. "m/0/3" or "0/3".
+        // Strip "m/" prefix — derivePath("m/...") requires a master (depth=0) node,
+        // but our account xprv sits at depth 3 (m/44'/0'/0').
+        const rawPath = bip32Derivs[0].path;
+        const relPath = rawPath.startsWith('m/') ? rawPath.slice(2) : rawPath;
+        const childNode = accountNode.derivePath(relPath);
         const childPair = ECPair.fromPrivateKey(
           Buffer.from(childNode.privateKey!), { network }
         );

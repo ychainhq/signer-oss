@@ -294,6 +294,32 @@ describe('BtcPsbtAdapter OSS — HD sweep signing', () => {
     ).rejects.toThrow(/bip32Derivation/i);
   });
 
+  it('signs sweep PSBT when bip32Derivation path has "m/" prefix (regression: Expected master got child)', async () => {
+    // psbt-enricher stores path as "m/0/3"; bip32.derivePath("m/...") throws
+    // "Expected master, got child" when the node is not at depth 0 (account xprv is at depth 3).
+    // Adapter must strip the "m/" prefix before calling derivePath.
+    const childIndex = 2;
+    const childNode = accountNode.derive(0).derive(childIndex);
+    const p2wpkh = bitcoin.payments.p2wpkh({ pubkey: Buffer.from(childNode.publicKey), network: NETWORK });
+    const psbt = new bitcoin.Psbt({ network: NETWORK });
+    psbt.addInput({ hash: 'd'.repeat(64), index: 0, witnessUtxo: { script: p2wpkh.output!, value: 300_000 } });
+    psbt.addOutput({ address: p2wpkh.address!, value: 290_000 });
+    // Deliberately set path with "m/" prefix — as psbt-enricher does
+    psbt.updateInput(0, {
+      bip32Derivation: [{
+        pubkey: Buffer.from(childNode.publicKey),
+        masterFingerprint: Buffer.from(accountNode.fingerprint),
+        path: `m/0/${childIndex}`,  // <-- "m/" prefix is the regression trigger
+      }],
+    });
+    const psbtBase64 = psbt.toBase64();
+    const result = await hdAdapter.sign(
+      makeSweepTask({ unsignedPayload: psbtBase64, unsignedPayloadHash: sha256Hex(psbtBase64), decisionMode: 'manual' })
+    );
+    expect(result.signedPayload).toBeTruthy();
+    expect(result.signedPayloadHash).toBe(sha256Hex(result.signedPayload));
+  });
+
   it('withdrawal task (non-sweep) still uses single WIF path', async () => {
     const { psbtBase64, psbtHash } = buildTestPsbt();
     const withdrawalTask = {
