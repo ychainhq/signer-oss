@@ -20,6 +20,12 @@ const configSchema = z.object({
   // --- BTC signing ---
   BTC_SIGNING_MODE: z.enum(['dev_env_key', 'keystore_file']).default('dev_env_key'),
   BTC_DEV_PRIVATE_KEY_WIF: z.string().optional(),
+  // BTC_DEV_ACCOUNT_XPRV: account-level xprv (m/44'/0'/0') for HD sweep signing.
+  // Required when signing btc_sweep tasks. Dev ONLY — never use with real funds.
+  BTC_DEV_ACCOUNT_XPRV: z.string().optional(),
+  // SIGNER_FINGERPRINT_HD: fingerprint identifying the HD account xprv entry.
+  // Defaults to SIGNER_FINGERPRINT if not set.
+  SIGNER_FINGERPRINT_HD: z.string().optional(),
   BTC_KEYSTORE_PATH: z.string().optional(),
   BTC_KEYSTORE_PASSWORD: z.string().optional(),
   BTC_NETWORK: z.enum(['mainnet', 'testnet', 'regtest']).default('regtest'),

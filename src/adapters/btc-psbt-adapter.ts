@@ -9,6 +9,7 @@ import crypto from 'crypto';
 import * as bitcoin from 'bitcoinjs-lib';
 import ECPairFactory from 'ecpair';
 import * as tinysecp from 'tiny-secp256k1';
+import BIP32Factory from 'bip32';
 import {
   ISigningAdapter,
   SignedPayload,
@@ -20,6 +21,7 @@ import { evaluateCommunityPolicy } from '../policy/community-policy';
 import { config } from '../config';
 
 const ECPair = ECPairFactory(tinysecp);
+const bip32 = BIP32Factory(tinysecp);
 
 function getBitcoinNetwork(): bitcoin.networks.Network {
   switch (config.BTC_NETWORK) {
@@ -40,12 +42,13 @@ export class BtcPsbtAdapter implements ISigningAdapter {
   }
 
   async sign(task: SigningTask): Promise<SignedPayload> {
-    // 1. Local policy check
+    // 1. Local policy check — business limits skipped for manual tasks (operator already approved)
     const policy = evaluateCommunityPolicy({
       amountRaw: task.amountRaw,
       feeRateSatVb: task.feeRateSatVb ?? undefined,
       outputsCount: task.outputsCount ?? undefined,
       expiresAt: task.expiresAt,
+      decisionMode: task.decisionMode,
     });
 
     if (!policy.approved) {
@@ -60,13 +63,64 @@ export class BtcPsbtAdapter implements ISigningAdapter {
       throw new Error('unsignedPayloadHash mismatch — payload integrity check failed');
     }
 
-    // 3. Get signing key
+    const network = getBitcoinNetwork();
+
+    if (task.requestType === 'btc_sweep') {
+      return this.signSweepPsbt(task, network);
+    }
+    return this.signWithdrawalPsbt(task, network);
+  }
+
+  // HD signing — one child key per PSBT input, derived from account xprv using bip32Derivation hints
+  private async signSweepPsbt(task: SigningTask, network: bitcoin.networks.Network): Promise<SignedPayload> {
+    const hdFingerprint = config.SIGNER_FINGERPRINT_HD ?? config.SIGNER_FINGERPRINT;
+    const xprv = this.keystore.getXprv(hdFingerprint);
+    const accountNode = bip32.fromBase58(xprv, network);
+
+    let psbt: bitcoin.Psbt;
+    try {
+      psbt = bitcoin.Psbt.fromBase64(task.unsignedPayload, { network });
+    } catch (err) {
+      throw new Error(`Failed to parse sweep PSBT: ${String(err)}`);
+    }
+
+    try {
+      for (let i = 0; i < psbt.data.inputs.length; i++) {
+        const bip32Derivs = psbt.data.inputs[i].bip32Derivation;
+        if (!bip32Derivs?.length) {
+          throw new Error(
+            `Sweep PSBT input ${i} missing bip32Derivation — ` +
+            'engine must enrich PSBT before creating signing task'
+          );
+        }
+        // Path is relative to account xpub, e.g. "m/0/3"
+        const path = bip32Derivs[0].path;
+        const childNode = accountNode.derivePath(path);
+        const childPair = ECPair.fromPrivateKey(
+          Buffer.from(childNode.privateKey!), { network }
+        );
+        psbt.signInput(i, childPair);
+      }
+      psbt.finalizeAllInputs();
+    } catch (err) {
+      throw new Error(`Sweep PSBT signing failed: ${String(err)}`);
+    }
+
+    const signedBase64 = psbt.toBase64();
+    return {
+      signedPayload: signedBase64,
+      signedPayloadHash: sha256Hex(signedBase64),
+      signerFingerprint: hdFingerprint,
+      signedAt: new Date().toISOString(),
+    };
+  }
+
+  // Single-key signing — for withdrawal batches (all inputs from hot wallet)
+  private async signWithdrawalPsbt(task: SigningTask, network: bitcoin.networks.Network): Promise<SignedPayload> {
     const fingerprint = config.SIGNER_FINGERPRINT;
     const wif = this.keystore.getWif(fingerprint);
-    const network = getBitcoinNetwork();
     const keyPair = ECPair.fromWIF(wif, network);
 
-    // 4. Parse and sign PSBT
     let psbt: bitcoin.Psbt;
     try {
       psbt = bitcoin.Psbt.fromBase64(task.unsignedPayload, { network });
@@ -82,11 +136,9 @@ export class BtcPsbtAdapter implements ISigningAdapter {
     }
 
     const signedBase64 = psbt.toBase64();
-    const signedHash = sha256Hex(signedBase64);
-
     return {
       signedPayload: signedBase64,
-      signedPayloadHash: signedHash,
+      signedPayloadHash: sha256Hex(signedBase64),
       signerFingerprint: fingerprint,
       signedAt: new Date().toISOString(),
     };

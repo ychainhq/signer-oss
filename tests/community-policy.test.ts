@@ -24,6 +24,7 @@ function makeInput(overrides: Partial<{
   feeRateSatVb: number | null;
   outputsCount: number | null;
   expiresAt: string;
+  decisionMode: 'auto' | 'manual';
 }> = {}) {
   return {
     amountRaw: '100000',
@@ -101,5 +102,57 @@ describe('evaluateCommunityPolicy', () => {
     }));
     expect(result.approved).toBe(false);
     expect(result.errorCode).toBe('task_expired');
+  });
+});
+
+describe('evaluateCommunityPolicy — decisionMode: manual', () => {
+  it('approves amount exceeding auto-sign limit when decisionMode is manual', () => {
+    // 5 BTC — well above the 1M sats limit, but operator already approved
+    const result = evaluateCommunityPolicy(makeInput({
+      amountRaw: '500000000',
+      decisionMode: 'manual',
+    }));
+    expect(result.approved).toBe(true);
+  });
+
+  it('approves high fee rate when decisionMode is manual', () => {
+    const result = evaluateCommunityPolicy(makeInput({
+      feeRateSatVb: 999,
+      decisionMode: 'manual',
+    }));
+    expect(result.approved).toBe(true);
+  });
+
+  it('approves high outputs count when decisionMode is manual', () => {
+    const result = evaluateCommunityPolicy(makeInput({
+      outputsCount: 9999,
+      decisionMode: 'manual',
+    }));
+    expect(result.approved).toBe(true);
+  });
+
+  it('still rejects expired task even when decisionMode is manual', () => {
+    const result = evaluateCommunityPolicy(makeInput({
+      expiresAt: PAST,
+      amountRaw: '500000000',
+      decisionMode: 'manual',
+    }));
+    expect(result.approved).toBe(false);
+    expect(result.errorCode).toBe('task_expired');
+  });
+
+  it('auto mode (undefined decisionMode) still enforces amount limit', () => {
+    const result = evaluateCommunityPolicy(makeInput({ amountRaw: '1000001' }));
+    expect(result.approved).toBe(false);
+    expect(result.errorCode).toBe('amount_exceeds_auto_limit');
+  });
+
+  it('explicit decisionMode auto still enforces amount limit', () => {
+    const result = evaluateCommunityPolicy(makeInput({
+      amountRaw: '1000001',
+      decisionMode: 'auto',
+    }));
+    expect(result.approved).toBe(false);
+    expect(result.errorCode).toBe('amount_exceeds_auto_limit');
   });
 });

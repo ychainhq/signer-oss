@@ -17,20 +17,21 @@ import { config } from '../config';
 
 interface KeystoreEntry {
   fingerprint: string;
-  rawPrivateKey: Buffer;  // 32 bytes, chain-agnostic
-  chainType: 'btc' | 'evm';
+  rawPrivateKey: Buffer;  // 32 bytes for btc/evm; unused for btc_hd (use xprv directly)
+  chainType: 'btc' | 'btc_hd' | 'evm';
   network?: string;       // BTC only: mainnet | testnet | regtest
-  wif?: string;           // BTC only: kept for adapters that need WIF directly
+  wif?: string;           // btc only: kept for adapters that need WIF directly
+  xprv?: string;          // btc_hd only: account-level xprv (Base58Check encoded)
 }
 
 export interface KeystoreFileEntry {
   fingerprint: string;
-  chainType: 'btc' | 'evm';
+  chainType: 'btc' | 'btc_hd' | 'evm';
   network?: string;
   salt: string;       // hex-encoded, 32 bytes
   iv: string;         // hex-encoded, 12 bytes
   tag: string;        // hex-encoded, 16 bytes
-  ciphertext: string; // hex-encoded
+  ciphertext: string; // hex-encoded — for btc_hd: plaintext is the xprv Base58Check string
 }
 
 export interface KeystoreFile {
@@ -56,7 +57,7 @@ export class LocalKeystore implements IKeyProvider {
   }
 
   private async loadDevEnvKeys(): Promise<void> {
-    // BTC key from WIF
+    // BTC single-key (WIF) — for withdrawal batch signing
     const wif = config.BTC_DEV_PRIVATE_KEY_WIF;
     if (wif) {
       const rawBtc = wifToPrivateKeyBuffer(wif);
@@ -69,6 +70,20 @@ export class LocalKeystore implements IKeyProvider {
         wif,
       });
       process.stdout.write(`[keystore] BTC dev key loaded (fingerprint: ${fingerprint})\n`);
+    }
+
+    // BTC HD key (account xprv) — for sweep signing (multi-input, one key per deposit address)
+    const xprv = config.BTC_DEV_ACCOUNT_XPRV;
+    if (xprv) {
+      const fingerprint = config.SIGNER_FINGERPRINT_HD ?? config.SIGNER_FINGERPRINT;
+      this.keys.set(fingerprint, {
+        fingerprint,
+        rawPrivateKey: Buffer.alloc(32), // unused for btc_hd — getXprv() returns xprv string
+        chainType: 'btc_hd',
+        network: config.BTC_NETWORK,
+        xprv,
+      });
+      process.stdout.write(`[keystore] BTC HD account key loaded (fingerprint: ${fingerprint})\n`);
     }
 
     // EVM key from hex (optional)
@@ -147,6 +162,15 @@ export class LocalKeystore implements IKeyProvider {
           network: entry.network,
           wif: plaintext,
         });
+      } else if (entry.chainType === 'btc_hd') {
+        // plaintext is the account xprv Base58Check string
+        this.keys.set(entry.fingerprint, {
+          fingerprint: entry.fingerprint,
+          rawPrivateKey: Buffer.alloc(32), // unused for btc_hd
+          chainType: 'btc_hd',
+          network: entry.network,
+          xprv: plaintext,
+        });
       } else {
         const normalized = plaintext.startsWith('0x') ? plaintext.slice(2) : plaintext;
         if (normalized.length !== 64) {
@@ -193,7 +217,19 @@ export class LocalKeystore implements IKeyProvider {
     return entry.wif;
   }
 
-  getChainType(fingerprint: string): 'btc' | 'evm' {
+  // HD sweep signing — returns account xprv for child-key derivation
+  getXprv(fingerprint: string): string {
+    const entry = this.keys.get(fingerprint);
+    if (!entry || entry.chainType !== 'btc_hd' || !entry.xprv) {
+      throw new Error(
+        `No HD account xprv for fingerprint: ${fingerprint}. ` +
+        'Set BTC_DEV_ACCOUNT_XPRV (dev) or add a btc_hd entry to the keystore file.'
+      );
+    }
+    return entry.xprv;
+  }
+
+  getChainType(fingerprint: string): 'btc' | 'btc_hd' | 'evm' {
     const entry = this.keys.get(fingerprint);
     if (!entry) throw new Error(`Key not found: ${fingerprint}`);
     return entry.chainType;
@@ -213,7 +249,7 @@ export class LocalKeystore implements IKeyProvider {
    */
   static encryptKey(
     fingerprint: string,
-    chainType: 'btc' | 'evm',
+    chainType: 'btc' | 'btc_hd' | 'evm',
     plaintext: string,
     password: string,
     network?: string

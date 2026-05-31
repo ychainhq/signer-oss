@@ -31,11 +31,11 @@ export class EvmTxAdapter implements ISigningAdapter {
   }
 
   async sign(task: SigningTask): Promise<SignedPayload> {
-    // 1. Structural + policy validation
+    // 1. Structural + policy validation — amount limit skipped for manual tasks
     assertEvmTxTaskValid(task, {
       allowedChainIds: getEvmChainIds(),
-      // 1 ETH in wei as default limit — override via EVM policy when implemented
       maxAmountWei: BigInt('1000000000000000000'),
+      decisionMode: task.decisionMode,
     });
 
     // 2. Verify unsigned payload hash

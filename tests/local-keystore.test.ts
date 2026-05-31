@@ -267,3 +267,92 @@ describe('LocalKeystore — encryptKey static method', () => {
     expect(e1.iv).not.toBe(e2.iv);
   });
 });
+
+// ─── btc_hd (account xprv) ───────────────────────────────────────────────────
+
+// A known regtest xprv string for testing (no real funds)
+const TEST_XPRV = 'tprv8ZgxMBicQKsPd7Uf69XL1XwhmjHopUGep8GuEiJDZmbgrzdivR88BHmqLG6pnGiMKAGnQEkvdR6asDWVnhDyN9Q6mhb1hXemQbqe2MKDBFK';
+const TEST_HD_FINGERPRINT = 'btc_hd:regtest:test0001';
+
+describe('LocalKeystore — btc_hd dev_env_key mode', () => {
+  let LocalKeystore: typeof import('../src/keystore/local-keystore').LocalKeystore;
+
+  beforeEach(() => {
+    jest.resetModules();
+    jest.doMock('../src/config', () => ({
+      config: {
+        ...makeMockConfig(),
+        BTC_DEV_ACCOUNT_XPRV: TEST_XPRV,
+        SIGNER_FINGERPRINT_HD: TEST_HD_FINGERPRINT,
+      },
+    }));
+    LocalKeystore = require('../src/keystore/local-keystore').LocalKeystore;
+  });
+
+  afterEach(() => { jest.restoreAllMocks(); });
+
+  it('loads btc_hd key alongside btc WIF key', async () => {
+    const ks = new LocalKeystore();
+    await ks.load();
+    const fps = await ks.listFingerprints();
+    expect(fps).toContain(TEST_FINGERPRINT);
+    expect(fps).toContain(TEST_HD_FINGERPRINT);
+  });
+
+  it('getXprv() returns the account xprv string', async () => {
+    const ks = new LocalKeystore();
+    await ks.load();
+    expect(ks.getXprv(TEST_HD_FINGERPRINT)).toBe(TEST_XPRV);
+  });
+
+  it('getXprv() throws for a WIF-only fingerprint', async () => {
+    const ks = new LocalKeystore();
+    await ks.load();
+    expect(() => ks.getXprv(TEST_FINGERPRINT)).toThrow(/HD account xprv/i);
+  });
+
+  it('getXprv() throws for unknown fingerprint', async () => {
+    const ks = new LocalKeystore();
+    await ks.load();
+    expect(() => ks.getXprv('btc_hd:unknown')).toThrow(/HD account xprv/i);
+  });
+
+  it('getChainType() returns btc_hd for HD key fingerprint', async () => {
+    const ks = new LocalKeystore();
+    await ks.load();
+    expect(ks.getChainType(TEST_HD_FINGERPRINT)).toBe('btc_hd');
+  });
+});
+
+describe('LocalKeystore — encryptKey btc_hd round-trip', () => {
+  it('encrypts and decrypts btc_hd xprv via keystore file', async () => {
+    jest.resetModules();
+    jest.doMock('../src/config', () => ({
+      config: makeMockConfig({ BTC_SIGNING_MODE: 'keystore_file' }),
+    }));
+    const { LocalKeystore: KS } = require('../src/keystore/local-keystore');
+
+    const entry = KS.encryptKey(TEST_HD_FINGERPRINT, 'btc_hd', TEST_XPRV, 'pw', 'regtest');
+    expect(entry.chainType).toBe('btc_hd');
+
+    // Write temp keystore file and load it
+    const tmpDir = require('os').tmpdir();
+    const tmpFile = require('path').join(tmpDir, `ks-hd-${Date.now()}.json`);
+    await require('fs/promises').writeFile(tmpFile, JSON.stringify({ version: 1, keys: [entry] }));
+
+    jest.resetModules();
+    jest.doMock('../src/config', () => ({
+      config: {
+        ...makeMockConfig({ BTC_SIGNING_MODE: 'keystore_file' }),
+        BTC_KEYSTORE_PATH: tmpFile,
+        BTC_KEYSTORE_PASSWORD: 'pw',
+      },
+    }));
+    const { LocalKeystore: KS2 } = require('../src/keystore/local-keystore');
+    const ks = new KS2();
+    await ks.load();
+    expect(ks.getXprv(TEST_HD_FINGERPRINT)).toBe(TEST_XPRV);
+
+    await require('fs/promises').unlink(tmpFile).catch(() => {});
+  });
+});
