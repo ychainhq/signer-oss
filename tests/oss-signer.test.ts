@@ -51,6 +51,7 @@ jest.mock('../src/config', () => ({
   getSupportedAssets:    () => ['bitcoin:BTC'],
   getSupportedFormats:   () => ['btc_psbt'],
   getAllowedDestinations: () => [],
+  getFallbackUrls:       () => [],
   getEvmChainIds:        () => [],
   isEvmEnabled:          () => false,
 }));

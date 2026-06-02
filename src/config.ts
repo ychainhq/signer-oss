@@ -8,6 +8,9 @@ const configSchema = z.object({
   TENANT_ID: z.string().min(1),
 
   CHAIN_API_BASE_URL: z.string().url(),
+  // Optional: comma-separated fallback engine URLs for active-active clusters.
+  // Example: CHAIN_API_FALLBACK_URLS=http://engine-2:3001,http://engine-3:3002
+  CHAIN_API_FALLBACK_URLS: z.string().default(''),
   SIGNER_API_KEY: z.string().min(1),
 
   POLL_INTERVAL_MS: z.coerce.number().int().min(1000).default(5000),
@@ -96,4 +99,10 @@ export function getEvmChainIds(): number[] {
 
 export function isEvmEnabled(): boolean {
   return getSupportedChains().some((c) => c !== 'bitcoin');
+}
+
+/** Returns fallback engine URLs for active-active cluster mode. */
+export function getFallbackUrls(): string[] {
+  if (!config.CHAIN_API_FALLBACK_URLS) return [];
+  return config.CHAIN_API_FALLBACK_URLS.split(',').map((s) => s.trim()).filter(Boolean);
 }

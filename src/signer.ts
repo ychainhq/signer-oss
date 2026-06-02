@@ -23,6 +23,7 @@ import {
   getSupportedChains,
   getSupportedAssets,
   getSupportedFormats,
+  getFallbackUrls,
   isEvmEnabled,
 } from './config';
 
@@ -37,8 +38,10 @@ export class OssSigner extends PollingLoop {
     const keystore = new LocalKeystore();
     const auditSink = new LocalAuditSink();
 
+    const fallbackUrls = getFallbackUrls();
     const client = new SignerApiClient({
       baseUrl: config.CHAIN_API_BASE_URL,
+      fallbackUrls,
       tenantId: config.TENANT_ID,
       signerId: config.SIGNER_ID,
       apiKey: config.SIGNER_API_KEY,
