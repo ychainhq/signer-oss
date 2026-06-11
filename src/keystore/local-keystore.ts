@@ -3,7 +3,7 @@
  *
  * Supports two key types:
  * - BTC: WIF-encoded private key (stored in KeystoreEntry, returned as raw 32-byte Buffer)
- * - EVM: raw hex private key (returned as raw 32-byte Buffer)
+ * - EVM/TRON: raw hex private key (returned as raw 32-byte Buffer)
  *
  * Two loading modes:
  * - dev_env_key: reads from env vars. Development ONLY — never use with real funds.
@@ -18,7 +18,7 @@ import { config } from '../config';
 interface KeystoreEntry {
   fingerprint: string;
   rawPrivateKey: Buffer;  // 32 bytes for btc/evm; unused for btc_hd (use xprv directly)
-  chainType: 'btc' | 'btc_hd' | 'evm';
+  chainType: 'btc' | 'btc_hd' | 'evm' | 'tron';
   network?: string;       // BTC only: mainnet | testnet | regtest
   wif?: string;           // btc only: kept for adapters that need WIF directly
   xprv?: string;          // btc_hd only: account-level xprv (Base58Check encoded)
@@ -26,7 +26,7 @@ interface KeystoreEntry {
 
 export interface KeystoreFileEntry {
   fingerprint: string;
-  chainType: 'btc' | 'btc_hd' | 'evm';
+  chainType: 'btc' | 'btc_hd' | 'evm' | 'tron';
   network?: string;
   salt: string;       // hex-encoded, 32 bytes
   iv: string;         // hex-encoded, 12 bytes
@@ -103,9 +103,25 @@ export class LocalKeystore implements IKeyProvider {
       process.stdout.write(`[keystore] EVM dev key loaded (fingerprint: ${fingerprint})\n`);
     }
 
+    const tronHex = config.TRON_DEV_PRIVATE_KEY_HEX;
+    if (tronHex) {
+      const normalized = tronHex.startsWith('0x') ? tronHex.slice(2) : tronHex;
+      if (normalized.length !== 64) {
+        throw new Error('TRON_DEV_PRIVATE_KEY_HEX must be a 32-byte hex string (64 hex chars)');
+      }
+      const rawTron = Buffer.from(normalized, 'hex');
+      const fingerprint = config.TRON_SIGNER_FINGERPRINT ?? 'tron:dev:0000000000000000';
+      this.keys.set(fingerprint, {
+        fingerprint,
+        rawPrivateKey: rawTron,
+        chainType: 'tron',
+      });
+      process.stdout.write(`[keystore] TRON dev key loaded (fingerprint: ${fingerprint})\n`);
+    }
+
     if (this.keys.size === 0) {
       throw new Error(
-        'No signing keys loaded. Set BTC_DEV_PRIVATE_KEY_WIF and/or EVM_DEV_PRIVATE_KEY_HEX'
+        'No signing keys loaded. Set BTC_DEV_PRIVATE_KEY_WIF, EVM_DEV_PRIVATE_KEY_HEX and/or TRON_DEV_PRIVATE_KEY_HEX'
       );
     }
   }
@@ -174,12 +190,12 @@ export class LocalKeystore implements IKeyProvider {
       } else {
         const normalized = plaintext.startsWith('0x') ? plaintext.slice(2) : plaintext;
         if (normalized.length !== 64) {
-          throw new Error(`Key '${entry.fingerprint}': EVM plaintext must be 32-byte hex (64 chars)`);
+          throw new Error(`Key '${entry.fingerprint}': ${entry.chainType.toUpperCase()} plaintext must be 32-byte hex (64 chars)`);
         }
         this.keys.set(entry.fingerprint, {
           fingerprint: entry.fingerprint,
           rawPrivateKey: Buffer.from(normalized, 'hex'),
-          chainType: 'evm',
+          chainType: entry.chainType,
         });
       }
 
@@ -229,7 +245,7 @@ export class LocalKeystore implements IKeyProvider {
     return entry.xprv;
   }
 
-  getChainType(fingerprint: string): 'btc' | 'btc_hd' | 'evm' {
+  getChainType(fingerprint: string): 'btc' | 'btc_hd' | 'evm' | 'tron' {
     const entry = this.keys.get(fingerprint);
     if (!entry) throw new Error(`Key not found: ${fingerprint}`);
     return entry.chainType;
@@ -249,7 +265,7 @@ export class LocalKeystore implements IKeyProvider {
    */
   static encryptKey(
     fingerprint: string,
-    chainType: 'btc' | 'btc_hd' | 'evm',
+    chainType: 'btc' | 'btc_hd' | 'evm' | 'tron',
     plaintext: string,
     password: string,
     network?: string

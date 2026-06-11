@@ -41,6 +41,15 @@ const configSchema = z.object({
   // EVM_CHAIN_IDS: comma-separated chain IDs this signer accepts (e.g. "1,137,8453")
   EVM_CHAIN_IDS: z.string().optional(),
 
+  // --- TRON signing (optional — enable by adding tron to SUPPORTED_CHAINS) ---
+  // TRON_DEV_PRIVATE_KEY_HEX: raw 32-byte private key as 64-char hex. Dev ONLY.
+  TRON_DEV_PRIVATE_KEY_HEX: z.string().optional(),
+  TRON_SIGNER_FINGERPRINT: z.string().optional(),
+  TRON_NETWORK: z.string().default('private'),
+  TRON_ALLOWED_CONTRACTS: z.string().default(''),
+  MAX_AUTO_SIGN_AMOUNT_SUN: z.coerce.bigint().default(1_000_000_000n),
+  MAX_TRON_FEE_LIMIT_SUN: z.coerce.bigint().default(50_000_000n),
+
   // --- Community policy ---
   MAX_AUTO_SIGN_AMOUNT_SATS: z.coerce.bigint().default(1_000_000n),
   MAX_FEE_RATE_SAT_VB: z.coerce.number().int().default(50),
@@ -98,7 +107,16 @@ export function getEvmChainIds(): number[] {
 }
 
 export function isEvmEnabled(): boolean {
-  return getSupportedChains().some((c) => c !== 'bitcoin');
+  return getSupportedChains().some((c) => c !== 'bitcoin' && c !== 'tron');
+}
+
+export function isTronEnabled(): boolean {
+  return getSupportedChains().includes('tron');
+}
+
+export function getTronAllowedContracts(): string[] {
+  if (!config.TRON_ALLOWED_CONTRACTS) return [];
+  return config.TRON_ALLOWED_CONTRACTS.split(',').map((s) => s.trim()).filter(Boolean);
 }
 
 /** Returns fallback engine URLs for active-active cluster mode. */

@@ -16,6 +16,7 @@ import { SigningTask } from '@chain-api/external-signer-protocol';
 import { LocalKeystore } from './keystore/local-keystore';
 import { BtcPsbtAdapter } from './adapters/btc-psbt-adapter';
 import { EvmTxAdapter } from './adapters/evm-tx-adapter';
+import { TronTxAdapter } from './adapters/tron-tx-adapter';
 import { LocalAuditSink } from './audit/local-audit-sink';
 import { HealthServer } from './health-server';
 import {
@@ -25,6 +26,7 @@ import {
   getSupportedFormats,
   getFallbackUrls,
   isEvmEnabled,
+  isTronEnabled,
 } from './config';
 
 export class OssSigner extends PollingLoop {
@@ -65,6 +67,7 @@ export class OssSigner extends PollingLoop {
     // Register adapters — add new chains here
     this.adapters = [
       new BtcPsbtAdapter(this.keystore),
+      ...(isTronEnabled() ? [new TronTxAdapter(this.keystore)] : []),
       ...(isEvmEnabled() ? [new EvmTxAdapter(this.keystore)] : []),
     ];
   }
