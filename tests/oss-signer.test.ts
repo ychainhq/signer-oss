@@ -54,6 +54,8 @@ jest.mock('../src/config', () => ({
   getFallbackUrls:       () => [],
   getEvmChainIds:        () => [],
   isEvmEnabled:          () => false,
+  isTronEnabled:         () => false,
+  getTronAllowedContracts: () => [],
 }));
 
 jest.mock('../src/keystore/local-keystore', () => ({
