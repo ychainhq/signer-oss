@@ -17,21 +17,21 @@ import { config } from '../config';
 
 interface KeystoreEntry {
   fingerprint: string;
-  rawPrivateKey: Buffer;  // 32 bytes for btc/evm; unused for btc_hd (use xprv directly)
-  chainType: 'btc' | 'btc_hd' | 'evm' | 'tron';
+  rawPrivateKey: Buffer;  // 32 bytes for btc/evm/tron; unused for btc_hd/tron_hd (use xprv directly)
+  chainType: 'btc' | 'btc_hd' | 'evm' | 'tron' | 'tron_hd';
   network?: string;       // BTC only: mainnet | testnet | regtest
   wif?: string;           // btc only: kept for adapters that need WIF directly
-  xprv?: string;          // btc_hd only: account-level xprv (Base58Check encoded)
+  xprv?: string;          // btc_hd / tron_hd: account-level xprv (Base58Check encoded)
 }
 
 export interface KeystoreFileEntry {
   fingerprint: string;
-  chainType: 'btc' | 'btc_hd' | 'evm' | 'tron';
+  chainType: 'btc' | 'btc_hd' | 'evm' | 'tron' | 'tron_hd';
   network?: string;
   salt: string;       // hex-encoded, 32 bytes
   iv: string;         // hex-encoded, 12 bytes
   tag: string;        // hex-encoded, 16 bytes
-  ciphertext: string; // hex-encoded — for btc_hd: plaintext is the xprv Base58Check string
+  ciphertext: string; // hex-encoded — for btc_hd/tron_hd: plaintext is the xprv Base58Check string
 }
 
 export interface KeystoreFile {
@@ -119,6 +119,19 @@ export class LocalKeystore implements IKeyProvider {
       process.stdout.write(`[keystore] TRON dev key loaded (fingerprint: ${fingerprint})\n`);
     }
 
+    // TRON HD key (account xprv) — for sweep signing (one child key per deposit address)
+    const tronXprv = config.TRON_DEV_ACCOUNT_XPRV;
+    if (tronXprv) {
+      const hdFingerprint = config.TRON_SIGNER_FINGERPRINT_HD ?? config.TRON_SIGNER_FINGERPRINT ?? 'tron:dev:0000000000000000';
+      this.keys.set(hdFingerprint, {
+        fingerprint: hdFingerprint,
+        rawPrivateKey: Buffer.alloc(32), // unused for tron_hd — getXprv() returns xprv string
+        chainType: 'tron_hd',
+        xprv: tronXprv,
+      });
+      process.stdout.write(`[keystore] TRON HD account key loaded (fingerprint: ${hdFingerprint})\n`);
+    }
+
     if (this.keys.size === 0) {
       throw new Error(
         'No signing keys loaded. Set BTC_DEV_PRIVATE_KEY_WIF, EVM_DEV_PRIVATE_KEY_HEX and/or TRON_DEV_PRIVATE_KEY_HEX'
@@ -178,12 +191,12 @@ export class LocalKeystore implements IKeyProvider {
           network: entry.network,
           wif: plaintext,
         });
-      } else if (entry.chainType === 'btc_hd') {
+      } else if (entry.chainType === 'btc_hd' || entry.chainType === 'tron_hd') {
         // plaintext is the account xprv Base58Check string
         this.keys.set(entry.fingerprint, {
           fingerprint: entry.fingerprint,
-          rawPrivateKey: Buffer.alloc(32), // unused for btc_hd
-          chainType: 'btc_hd',
+          rawPrivateKey: Buffer.alloc(32), // unused for hd types
+          chainType: entry.chainType,
           network: entry.network,
           xprv: plaintext,
         });
@@ -233,19 +246,19 @@ export class LocalKeystore implements IKeyProvider {
     return entry.wif;
   }
 
-  // HD sweep signing — returns account xprv for child-key derivation
+  // HD sweep signing — returns account xprv for child-key derivation (btc_hd or tron_hd)
   getXprv(fingerprint: string): string {
     const entry = this.keys.get(fingerprint);
-    if (!entry || entry.chainType !== 'btc_hd' || !entry.xprv) {
+    if (!entry || !entry.xprv || (entry.chainType !== 'btc_hd' && entry.chainType !== 'tron_hd')) {
       throw new Error(
         `No HD account xprv for fingerprint: ${fingerprint}. ` +
-        'Set BTC_DEV_ACCOUNT_XPRV (dev) or add a btc_hd entry to the keystore file.'
+        'Set BTC_DEV_ACCOUNT_XPRV / TRON_DEV_ACCOUNT_XPRV (dev) or add a btc_hd/tron_hd entry to the keystore file.'
       );
     }
     return entry.xprv;
   }
 
-  getChainType(fingerprint: string): 'btc' | 'btc_hd' | 'evm' | 'tron' {
+  getChainType(fingerprint: string): 'btc' | 'btc_hd' | 'evm' | 'tron' | 'tron_hd' {
     const entry = this.keys.get(fingerprint);
     if (!entry) throw new Error(`Key not found: ${fingerprint}`);
     return entry.chainType;
@@ -265,7 +278,7 @@ export class LocalKeystore implements IKeyProvider {
    */
   static encryptKey(
     fingerprint: string,
-    chainType: 'btc' | 'btc_hd' | 'evm' | 'tron',
+    chainType: 'btc' | 'btc_hd' | 'evm' | 'tron' | 'tron_hd',
     plaintext: string,
     password: string,
     network?: string

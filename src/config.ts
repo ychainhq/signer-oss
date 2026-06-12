@@ -45,6 +45,10 @@ const configSchema = z.object({
   // TRON_DEV_PRIVATE_KEY_HEX: raw 32-byte private key as 64-char hex. Dev ONLY.
   TRON_DEV_PRIVATE_KEY_HEX: z.string().optional(),
   TRON_SIGNER_FINGERPRINT: z.string().optional(),
+  // TRON_DEV_ACCOUNT_XPRV: account-level xprv (m/44'/195'/0') for HD sweep signing. Dev ONLY.
+  TRON_DEV_ACCOUNT_XPRV: z.string().optional(),
+  // TRON_SIGNER_FINGERPRINT_HD: fingerprint for the TRON HD account key. Defaults to TRON_SIGNER_FINGERPRINT.
+  TRON_SIGNER_FINGERPRINT_HD: z.string().optional(),
   TRON_NETWORK: z.string().default('private'),
   TRON_ALLOWED_CONTRACTS: z.string().default(''),
   MAX_AUTO_SIGN_AMOUNT_SUN: z.coerce.bigint().default(1_000_000_000n),
