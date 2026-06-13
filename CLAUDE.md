@@ -8,6 +8,45 @@
 - Wspolne DTO, zod schemas, payload hashing, polling client i walidacje ida do `../packages/external-signer-protocol` albo `../packages/external-signer-core`.
 - Nie dodawaj do OSS logiki biznesowej tenanta, routingu chain nodes ani bezposrednich zaleznosci od bazy engine'u.
 
+## Architektura kluczy TRON
+
+OSS signer przechowuje dwie kategorie kluczy TRON o rozlacznych rolach:
+
+| Klucz | Fingerprint env var | Typ klucza | Rola |
+|-------|---------------------|-----------|------|
+| Withdrawal | `TRON_SIGNER_FINGERPRINT` | EC secp256k1 private key | Hot wallet — podpisywanie wyplat klientow |
+| Sweep HD | `TRON_SIGNER_FINGERPRINT_HD` | BIP32 HD xprv, SLIP44 coin_type=195 | Klucze per-depozyt: derywacja m/0/N |
+
+**SR key (localwitness)** — klucz blokowy Super Representative, konfigurowany wylacznie w TRON nodzie (`config-node1.conf`). OSS signer nigdy nie widzi ani nie obsluguje SR key.
+
+### Co signer podpisuje
+
+Engine przekazuje `unsignedPayload` z `payloadFormat=tron_raw_tx`. Signer wykonuje kolejno:
+
+1. Integralnosc: `sha256(unsignedPayload) === unsignedPayloadHash` (z task envelope)
+2. Polityka: `assertTronTxTaskValid` — allowlist sieci i kontraktow TRC-20, limity kwoty/fee_limit, walidacja sciezki derywacji
+3. Format: `txIdBytes.length === 32`
+4. Podpisywanie: `signRecoverable(txIdBytes, privKey)` → 65 bajtow (64B sig + 1B recovery ID) → 130 hex chars
+
+`txID` = sha256(raw_data), budowane przez TRON FullNode przez `/wallet/triggersmartcontract`. Signer weryfikuje txID, nie recalculates raw_data.
+
+### Weryfikacja polityki (`assertTronTxTaskValid`)
+
+- Allowlist dozwolonych sieci (mainnet / shasta / nile / privatenet)
+- Allowlist adresow kontraktow TRC-20 (np. adres USDT na mainnet)
+- Limit `amount` — gorny pulap kwoty transferu per task
+- Limit `fee_limit` — gorny pulap energii/bandwidth per task
+- Dla sweep HD: format sciezki `m/0/N`, zakres indeksu N
+
+### Reguly implementacyjne
+
+- `signRecoverable` (nie `sign`) — TRON wymaga EC recoverable signature do weryfikacji na chain
+- Withdrawal key: bezposredni private key, bez HD derywacji
+- Sweep key: HD child key `m/0/N`, gdzie N = `derivationIndex` z task payload, SLIP44 coin_type=195
+- OSS provider: klucze lokalne (dev/test), np. z pliku lub env var — nie Vault/KMS/HSM (to Enterprise)
+- Klucze nigdy nie trafiaja do logow ani odpowiedzi protokolu
+- Interfejsy i walidacje wspolne z Enterprise ida do `../packages/external-signer-protocol`
+
 ## Docker i release
 
 - Publiczny obraz Docker Hub: `chain-api-signer-oss`.
