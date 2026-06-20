@@ -46,6 +46,6 @@ USER signer
 
 EXPOSE 3101
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-  CMD wget -q -O- http://localhost:${SIGNER_PORT:-3101}/health || exit 1
+  CMD wget -q -O- http://127.0.0.1:${SIGNER_PORT:-3101}/health || exit 1
 
 ENTRYPOINT ["node", "dist/main.js"]
