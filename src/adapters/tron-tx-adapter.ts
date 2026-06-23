@@ -106,5 +106,6 @@ export class TronTxAdapter implements ISigningAdapter {
 
 function signTxId(txIdBytes: Buffer, privateKey: Buffer): string {
   const { signature, recoveryId } = tinysecp.signRecoverable(txIdBytes, privateKey);
-  return Buffer.concat([Buffer.from(signature), Buffer.from([recoveryId])]).toString('hex');
+  // Java-Tron reads byte[64] as header (expects 27–28, same as TronWeb compact format)
+  return Buffer.concat([Buffer.from(signature), Buffer.from([recoveryId + 27])]).toString('hex');
 }
