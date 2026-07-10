@@ -24,6 +24,12 @@ interface TronPayloadEnvelope {
   fromAddress?: string;
   toAddress?: string;
   derivationPath?: string;
+  // delegate_resource / undelegate_resource fields
+  resource?: string;
+  ownerAddress?: string;
+  receiverAddress?: string;
+  balanceSun?: string;
+  lock?: boolean;
   rawTransaction: {
     txID: string;
     raw_data: Record<string, unknown>;
@@ -48,6 +54,8 @@ export class TronTxAdapter implements ISigningAdapter {
       maxAmountSun: config.MAX_AUTO_SIGN_AMOUNT_SUN,
       maxFeeLimitSun: config.MAX_TRON_FEE_LIMIT_SUN,
       decisionMode: task.decisionMode,
+      hotWalletAddress: this.keystore.getTronHotWalletAddress(),
+      maxStakedEnergySun: config.MAX_TRON_STAKED_ENERGY_SUN,
     });
 
     const computedHash = sha256Hex(task.unsignedPayload);
@@ -70,8 +78,8 @@ export class TronTxAdapter implements ISigningAdapter {
     let privateKeyBytes: Buffer;
     let signerFingerprint: string;
 
-    if (task.requestType === 'tron_sweep' && derivationPath) {
-      // HD sweep: derive child key from account xprv
+    if ((task.requestType === 'tron_sweep' || task.requestType === 'tron_trx_sweep') && derivationPath) {
+      // HD sweep: derive child key from account xprv (USDT sweep or TRX sweep from deposit address)
       const hdFingerprint = config.TRON_SIGNER_FINGERPRINT_HD ?? config.TRON_SIGNER_FINGERPRINT ?? 'tron:dev:0000000000000000';
       const xprv = this.keystore.getXprv(hdFingerprint);
       // Use mainnet network for xprv format (TRON has no separate network for HD keys)

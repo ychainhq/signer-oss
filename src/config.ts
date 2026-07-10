@@ -53,6 +53,10 @@ const configSchema = z.object({
   TRON_ALLOWED_CONTRACTS: z.string().default(''),
   MAX_AUTO_SIGN_AMOUNT_SUN: z.coerce.bigint().default(1_000_000_000n),
   MAX_TRON_FEE_LIMIT_SUN: z.coerce.bigint().default(50_000_000n),
+  // Hot wallet TRON address (m/1/0). Set by seed.ts in dev; operator-set in prod.
+  TRON_DEV_HOT_ADDRESS: z.string().optional(),
+  // Max TRX staked for energy delegation cap (in sun). Default 100 TRX = 100_000_000 sun.
+  MAX_TRON_STAKED_ENERGY_SUN: z.coerce.bigint().default(100_000_000n),
 
   // --- Community policy ---
   MAX_AUTO_SIGN_AMOUNT_SATS: z.coerce.bigint().default(1_000_000n),

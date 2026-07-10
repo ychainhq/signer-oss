@@ -30,6 +30,18 @@ Engine przekazuje `unsignedPayload` z `payloadFormat=tron_raw_tx`. Signer wykonu
 
 `txID` = sha256(raw_data), budowane przez TRON FullNode przez `/wallet/triggersmartcontract`. Signer weryfikuje txID, nie recalculates raw_data.
 
+### Signing requestTypes TRON
+
+| requestType | Klucz | payloadFormat | Opis |
+|---|---|---|---|
+| `tron_withdrawal` | Hot wallet (withdrawal) | `tron_raw_tx` | Wyplata klienta — USDT lub TRX |
+| `tron_sweep` | HD xprv (m/0/N) | `tron_raw_tx` | Sweep USDT (TRC-20) z adresu depozytowego |
+| `tron_trx_sweep` | HD xprv (m/0/N) | `tron_raw_tx` | Sweep natywnego TRX z adresu depozytowego |
+| `tron_delegate_energy` | Hot wallet (withdrawal) | `tron_raw_tx` | Stake 2.0: deleguje ENERGY do adresu przed USDT sweep |
+| `tron_undelegate_energy` | Hot wallet (withdrawal) | `tron_raw_tx` | Reclaim delegowanej ENERGY po sweepie |
+
+HD routing: jesli task.requestType === 'tron_sweep' lub 'tron_trx_sweep' I payload.derivationPath jest ustawiony → HD child key. Pozostale → hot wallet key.
+
 ### Weryfikacja polityki (`assertTronTxTaskValid`)
 
 - Allowlist dozwolonych sieci (mainnet / shasta / nile / privatenet)
@@ -37,6 +49,20 @@ Engine przekazuje `unsignedPayload` z `payloadFormat=tron_raw_tx`. Signer wykonu
 - Limit `amount` — gorny pulap kwoty transferu per task
 - Limit `fee_limit` — gorny pulap energii/bandwidth per task
 - Dla sweep HD: format sciezki `m/0/N`, zakres indeksu N
+- `hotWalletAddress` — weryfikuje `ownerAddress` w delegation tasks
+- `maxStakedEnergySun` — cap na `balanceSun` w delegation tasks (domyslnie 100 TRX = 100_000_000 sun)
+
+### Zmienne konfiguracyjne OSS (TRON)
+
+| Zmienna | Typ | Opis |
+|---|---|---|
+| `TRON_DEV_ACCOUNT_XPRV` | string | HD xprv dla sweep kluczy (m/0/N) |
+| `TRON_SIGNER_FINGERPRINT` | string | Fingerprint withdrawal key (hot wallet) |
+| `TRON_SIGNER_FINGERPRINT_HD` | string | Fingerprint HD sweep key |
+| `TRON_DEV_HOT_ADDRESS` | string? | Adres hot wallet TRON (ustawiany przez seed.ts w dev) |
+| `MAX_TRON_STAKED_ENERGY_SUN` | bigint | Cap dla delegation balanceSun (domyslnie 100_000_000 = 100 TRX) |
+
+`TRON_DEV_HOT_ADDRESS` musi odpowiadac adresowi TRON hot wallet key. W produkcji ustaw jako `HOT_WALLET_TRON_ADDRESS`.
 
 ### Reguly implementacyjne
 

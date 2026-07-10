@@ -269,6 +269,16 @@ export class LocalKeystore implements IKeyProvider {
   }
 
   /**
+   * Return the TRON hot wallet address (m/1/0).
+   * In dev mode this is TRON_DEV_HOT_ADDRESS set by seed.ts.
+   * In keystore_file mode operators must set HOT_WALLET_TRON_ADDRESS.
+   * Used by TronTxAdapter to populate `hotWalletAddress` in the validator config.
+   */
+  getTronHotWalletAddress(): string | undefined {
+    return config.TRON_DEV_HOT_ADDRESS ?? process.env['HOT_WALLET_TRON_ADDRESS'];
+  }
+
+  /**
    * CLI helper: encrypt a single key for inclusion in a keystore file.
    *
    * Usage (generate keystore file):
@@ -300,6 +310,10 @@ export class LocalKeystore implements IKeyProvider {
     };
   }
 }
+
+// TRON address derivation requires keccak256 which is not in Node.js crypto stdlib.
+// In OSS/dev mode the address is read from TRON_DEV_HOT_ADDRESS set by seed.ts / start.sh.
+// Production keystore_file mode: set HOT_WALLET_TRON_ADDRESS in signer env (operator-provisioned).
 
 /**
  * Decode WIF to raw 32-byte private key without importing ecpair.
